@@ -1,3 +1,3 @@
 # SongPong (RGARL-NN)
 
-A Recurrent Generative Adversarial Reinforcement Learning Algorithm.
+An attempt to create a musical Information-Preserving Representation-Generator for Pong using LSTMs in a Generative-Adversarial architecture to generate music that feeds a pong-playing RL Agent (Also an NN) 
