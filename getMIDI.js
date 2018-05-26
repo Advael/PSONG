@@ -1,6 +1,6 @@
 var fs = require("fs");
 var webdriver = require("selenium-webdriver");
-chrome = require("selenium-webdriver/firefox");
+// chrome = require("selenium-webdriver/firefox");
 By = webdriver.By;
 until = webdriver.until;
 // options = new chrome.Options();
