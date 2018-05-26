@@ -21,3 +21,9 @@ https://github.com/vishnubob/python-midi for MIDI file IO.
 
 Author: Olof Mogren
 
+
+
+* note * 
+
+python rnn_gan.py --datadir data/ --traindir train_dir/ --feed_previous --feature_matching --bidirectional_d --learning_rate 0.1 --pretraining_epochs 6
+
