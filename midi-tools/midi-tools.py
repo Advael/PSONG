@@ -7,16 +7,15 @@ from copy import deepcopy
 # spacing, one note per key press                                                   #
 #                                                                                   #
 # fileToTickNotes reads a midi file and returns a list of the active notes at each  #
-# tick of the song; if more than one key is pressed it takes the median note        #
+# tick of the song; if more than one key is pressed it takes the most recent        #
 # I believe this is the one we want to use, possibly sampling every nth tick        #
 #                                                                                   #
-# I'm planning on modifying fileToTickNotes to not carry a big list of potential    #
-# notes around, should speed it up a lot. The idea was to have different strategies #
-# for handling concurrent notes, but there are better ways to that, too             #
+# There is the potential for other ways of dealing with multiple simultaneous notes #
+# but this way is simple and effective                                              #
 #####################################################################################
 
 def silence():
-  return [0 for i in range(128)]
+  return []
 
 def fileToNotes(f):
   pattern = read_midifile(f)
@@ -36,22 +35,19 @@ def fileToTicks(f):
     e = track[j]
     while e.tick == i:
       if isinstance(e, NoteOnEvent):
-        ticks[i][e.data[0]] = 1
+        ticks[i].append(e.data[0])
       if isinstance(e, NoteOffEvent):
-        ticks[i][e.data[0]] = 0
+        ticks[i].remove(e.data[0])
       j += 1
       e = track[j]
   return ticks
 
-def tickNotes(t):
-  return [i for i in range(len(t)) if t[i] == 1]
-
 def singleNote(notes):
   if len(notes) == 0: return 0
-  else: return notes[len(notes)//2]
+  else: return notes[len(notes)-1]
 
 def fileToTickNotes(f):
-  return list(map(singleNote, map(tickNotes, fileToTicks(f)))) 
+  return list(map(singleNote, fileToTicks(f))) 
 
 if len(argv) > 1:
-  print(list(map(singleNote, map(tickNotes, fileToTicks(argv[1])))))
+  print(list(map(singleNote, fileToTicks(argv[1]))))
