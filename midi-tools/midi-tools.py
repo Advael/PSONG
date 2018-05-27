@@ -14,9 +14,6 @@ from copy import deepcopy
 # but this way is simple and effective                                              #
 #####################################################################################
 
-def silence():
-  return []
-
 def fileToNotes(f):
   pattern = read_midifile(f)
   track = pattern[0]
@@ -28,7 +25,7 @@ def fileToTicks(f):
   track = pattern[0]
   track.make_ticks_abs()
   lastTick = track[len(track)-1].tick
-  ticks = [silence() for i in range(lastTick)]
+  ticks = [[] for i in range(lastTick)]
   j = 0
   for i in range(lastTick):
     ticks[i] = deepcopy(ticks[i-1])

@@ -33,7 +33,7 @@ events = []
 for track in pattern:
     for event in track:
         events.append(event)
-events.sort()
+events = sorted(events, key=lambda e: e.tick)
 seq.start_sequencer()
 for event in events:
     buf = seq.event_write(event, False, False, True)
