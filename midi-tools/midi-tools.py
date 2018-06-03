@@ -51,7 +51,6 @@ def fileToTickNotes(f):
   return list(map(singleNote, fileToTicks(f)))
 
 def stageToSeq(tickNotes):
-  parent, child = socket.socket
   client = 128
   port = 0
   seq = sequencer.SequencerWrite()
@@ -77,6 +76,9 @@ def stageToSeq(tickNotes):
     if buf < 1000:
       time.sleep(.1)
   time.sleep(30)
+
+#def stageDaemon(socket):
+  
 
 if len(argv) > 1:
 #  print(list(map(singleNote, fileToTicks(argv[1]))))
