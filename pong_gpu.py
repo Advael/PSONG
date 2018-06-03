@@ -8,7 +8,7 @@ import cupy as cp
 import time, threading
 
 #backend
-be = cp
+be = cp 
 
 # hyperparameters
 A = 3   # 2, 3 for no-ops
@@ -98,6 +98,16 @@ def policy_backward(eph, epdlogp):
 
   return {'W1':dW1, 'W2':dW2}
 
+
+def getPixels():
+    import gym
+    env = gym.make("Pong-v0")
+    observation = env.reset()
+    #observation, reward, done, info = env.step(action)
+    return observation
+
+def act(midi):
+    print('midi data: ', midi)
 
 
 env = gym.make("Pong-v0")
