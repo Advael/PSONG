@@ -276,7 +276,7 @@ class RNNGAN(object):
 
   def __init__(self, is_training, num_song_features=None, num_meta_features=None):
 
-    num_song_features = 6400
+    pixel_features = 6400
     pprint("num song features = {}".format(num_song_features))
 
     batch_size = FLAGS.batch_size
@@ -285,15 +285,20 @@ class RNNGAN(object):
     songlength = FLAGS.songlength
     self.songlength = songlength    #self.global_step            = tf.Variable(0, trainable=False)
 
-    print('songlength: {}'.format(self.songlength))
-    self._input_songdata = tf.placeholder(shape=[batch_size, songlength, num_song_features], dtype=data_type())
+    # print('songlength: {}'.format(self.songlength))
+    self._input_songdata = tf.placeholder(shape=[batch_size, songlength, pixel_features], dtype=data_type())
     self._input_metadata = tf.placeholder(shape=[batch_size, num_meta_features], dtype=data_type())
 
+    # Discriminator placeholders ##
+    self._input_d_songdata = tf.placeholder(shape=[batch_size, songlength, num_song_features], dtype=data_type())
 
+
+
+    # self.input_d_songData = tf.placeholder(shape = [], dtype = data_type())
     # split input song data into song length units and squeeze out tensors of 1 dim
     songdata_inputs = [tf.squeeze(input_, [1]) for input_ in tf.split(self._input_songdata,songlength,1)]
     
-    self.modified_inputs = self.SetgeneratorInputs(batch_size, songlength, num_song_features)
+    self.modified_inputs = self.SetgeneratorInputs(batch_size, songlength, pixel_features)
     
     with tf.variable_scope('G') as scope:
       scope.set_regularizer(tf.contrib.layers.l2_regularizer(scale=FLAGS.reg_scale))
@@ -319,7 +324,7 @@ class RNNGAN(object):
       # REAL GENERATOR:
       state = self._initial_state
       # as we feed the output as the input to the next, we 'invent' the initial 'output'.
-      generated_point = tf.random_uniform(shape = [batch_size, num_song_features], minval=0.0, maxval=1.0, dtype=data_type())
+      generated_point = tf.random_uniform(shape = [batch_size, pixel_features], minval=0.0, maxval=1.0, dtype=data_type())
       outputs = []
       self._generated_features = []
       for i,input_ in enumerate(random_rnninputs):
@@ -338,14 +343,15 @@ class RNNGAN(object):
 
 
         #generated_point = tf.nn.relu(linear(output, num_song_features, scope='output_layer', reuse_scope=(i!=0)))
-        generated_point = linear(output, num_song_features, scope='output_layer', reuse_scope=(i!=0))
+        generated_point = linear(output, pixel_features, scope='output_layer', reuse_scope=(i!=0))
+        # generated_point = linear(output, num_song_features, scope='output_layer', reuse_scope=(i!=0))
         self._generated_features.append(generated_point)
       
       
       # PRETRAINING GENERATOR, will feed inputs, not generated outputs:
       scope.reuse_variables()
       # as we feed the output as the input to the next, we 'invent' the initial 'output'.
-      prev_target = tf.random_uniform(shape=[batch_size, num_song_features], minval=0.0, maxval=1.0, dtype=data_type())
+      prev_target = tf.random_uniform(shape=[batch_size, pixel_features], minval=0.0, maxval=1.0, dtype=data_type())
       outputs = []
       self._generated_features_pretraining = []
       for i,input_ in enumerate(random_rnninputs):
@@ -356,15 +362,10 @@ class RNNGAN(object):
         #   concat_values.append(self._input_metadata)
         if len(concat_values):
           input_ = tf.concat(axis=1, values=concat_values)
-        pprint("--------------------------")
-        inpt = tf.Print(input_, [input_], 'testing this - ', summarize = 10)
-        pprint(inpt)
+
         input_ = tf.nn.relu(linear(input_, FLAGS.hidden_size_g, scope='input_layer', reuse_scope=(i!=0)))
         output, state = cell(input_, state)
         
-        opt = tf.Print(output, [output], 'testing this - ', summarize = 10)
-        pprint(opt)
-        pprint("--------------------------")
         outputs.append(output)
 
         # pprint("TESTING OUTPUTS {}".format(outputs))
@@ -373,7 +374,7 @@ class RNNGAN(object):
 
 
         #generated_point = tf.nn.relu(linear(output, num_song_features, scope='output_layer', reuse_scope=(i!=0)))
-        generated_point = linear(output, num_song_features, scope='output_layer', reuse_scope=(i!=0))
+        generated_point = linear(output, pixel_features, scope='output_layer', reuse_scope=(i!=0))
         self._generated_features_pretraining.append(generated_point)
         prev_target = songdata_inputs[i]
       
@@ -420,7 +421,7 @@ class RNNGAN(object):
     with tf.variable_scope('D') as scope:
       scope.set_regularizer(tf.contrib.layers.l2_regularizer(scale=FLAGS.reg_scale))
       # Make list of tensors. One per step in recurrence.
-      # Each tensor is batchsize*numfeatures.
+      # Each tensor is batchsize * numfeatures.
       # TODO: (possibly temporarily) disabling meta info
       print('self._input_songdata shape {}'.format(self._input_songdata.get_shape()))
       print('generated data shape {}'.format(self._generated_features[0].get_shape()))
@@ -481,6 +482,7 @@ class RNNGAN(object):
      # print('******************shape inputs[{}] {}'.format(i, inputs[i].get_shape()))
       inputs[0] = tf.Print(inputs[0], [inputs[0]],
            '{} inputs[0] = '.format(msg), summarize=20, first_n=20)
+
     if is_training and FLAGS.keep_prob < 1:
       inputs = [tf.nn.dropout(input_, FLAGS.keep_prob) for input_ in inputs]
     #lstm_cell = tf.nn.rnn_cell.BasicLSTMCell(FLAGS.hidden_size_d, forget_bias=1.0, state_is_tuple=True)
@@ -593,6 +595,8 @@ def run_epoch(session, model, loader, datasetlabel, eval_op_g, eval_op_d, pretra
   loader.rewind(part=datasetlabel)
   [batch_meta, batch_song] = loader.get_batch(model.batch_size, model.songlength, part=datasetlabel)
 
+  pixels = np.reshape(prepro(getPixels()), (1, 1, 6400))
+
   run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
 
   while batch_meta is not None and batch_song is not None:
@@ -617,26 +621,30 @@ def run_epoch(session, model, loader, datasetlabel, eval_op_g, eval_op_d, pretra
         #elif d_loss*.7 > g_loss:
           #print('G train loss is {}, D train loss is {}. Freezing optimization of G'.format(g_loss, d_loss))
         op_d = tf.no_op()
-    #fetches = [model.cost, model.final_state, eval_op]
-    # if pretraining:
-    #   if pretraining_d:
-    #     fetches = [model.rnn_pretraining_loss, model.d_loss, op_g, op_d]
-    #   else:
-    #     fetches = [model.rnn_pretraining_loss, tf.no_op(), op_g, op_d]
-    # else:
-    #   fetches = [model.g_loss, model.d_loss, op_g, op_d]
+    # fetches = [model.cost, model.final_state, eval_op]
+    if pretraining:
+      if pretraining_d:
+        fetches = [model.rnn_pretraining_loss, model.d_loss, op_g, op_d]
+      else:
+        fetches = [model.rnn_pretraining_loss, tf.no_op(), op_g, op_d]
+    else:
+      fetches = [model.g_loss, model.d_loss, op_g, op_d]
     feed_dict = {}
-    feed_dict[model.input_songdata.name] = batch_song
+    feed_dict[model.input_songdata.name] = pixels
     feed_dict[model.input_metadata.name] = batch_meta
 
+    # pprint(" batch song = ".format(batch_song))
+    # b = tf.Print(batch_song, [batch_song], summarize = 10)
+    # pprint(b)
+    # pprint(feed_dict)
 
     # fetches = 
-    fetches = np.reshape(prepro(getPixels()), (1, 1, 6400))
-    print ('pixels', fetches.shape)
+    # fetches = np.reshape(prepro(getPixels()), (1, 1, 6400))
+    # print ('pixels', fetches.shape)
     # with session.as_default():
     #   fetches = tf.constant(fetches)
-    p = tf.Print(fetches, [fetches])
-    pprint(p)
+    # p = tf.Print(fetches, [fetches])
+    # pprint(p)
 
     '''
     zero_padding = tf.zeros([6396])
@@ -660,8 +668,8 @@ def run_epoch(session, model, loader, datasetlabel, eval_op_g, eval_op_d, pretra
     if run_metadata:
       g_loss, d_loss, _, _ = session.run(fetches, feed_dict, options=run_options, run_metadata=run_metadata)
     else:
-      p = tf.Print(fetches, [fetches])
-      pprint(p)
+      # p = tf.Print(fetches, [fetches])
+      # pprint(p)
       g_loss, d_loss, _, _ = session.run(fetches, feed_dict)
     time_after_graph = time.time()
     if iters > 0:
@@ -682,6 +690,7 @@ def run_epoch(session, model, loader, datasetlabel, eval_op_g, eval_op_d, pretra
         print("{}: {} batch loss: G: {}, D: {}, avg loss: G: {}, D: {} speed: {} songs/s, avg in graph: {}, avg in python: {}.".format(datasetlabel, iters, g_loss, d_loss, float(g_losses)/float(iters), float(d_losses)/float(iters),songs_per_sec, avg_time_in_graph, avg_time_in_python))
     #batchtime = time.time()
     [batch_meta, batch_song] = loader.get_batch(model.batch_size, model.songlength, part=datasetlabel)
+    pixels = np.reshape(prepro(getPixels()), (1, 1, 6400))
     #times_in_batchreading.append(time.time()-batchtime)
 
   if iters == 0:
@@ -745,8 +754,9 @@ def sample(session, model,loader, batch = False):
 def getPixels():
     import gym
     env = gym.make("Pong-v0")
-    observation = env.reset()
+    observation = env.step(0)
     #observation, reward, done, info = env.step(action)
+    # observation = np.ones(shape = (6400))
     return observation
 
 def act(midi):
