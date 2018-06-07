@@ -94,10 +94,7 @@ def preprocess(image):
     image[image == bgc] = 0
     return np.expand_dims(image.astype(np.float16), axis=2)
 
-def song_model(obs, batch_size, songs = 10):
-    K.set_learning_phase(1)
-    songs, n_vocab = load_midis(maxSongs = songs)
-    songData,songLabelTemplate = process_songs(songs, n_vocab)
+def song_model(obs, batch_size, n_vocab):
     songModel = Sequential()
     songModel.add(Embedding(input_dim=400, output_dim=n_vocab, input_length=None, batch_input_shape = (batch_size,) + (400,)))
     songModel.add(LSTM(512, dropout = 0.3, stateful = True, return_sequences=True))
@@ -107,7 +104,7 @@ def song_model(obs, batch_size, songs = 10):
     songModel.add(Activation('softmax'))
     return songModel
 
-def agent_model(env, batch_size, lr = 1e-3):
+def agent_model(env, batch_size, n_vocab, lr = 1e-3):
     obs = env.reset()
     obs = preprocess(obs)
     batch_size = 1
@@ -136,9 +133,12 @@ def discount_rewards(rewards, gamma = 0.99):
     return discounted
 
 def __main__():
+    K.set_learning_phase(1)
+    songs, n_vocab = load_midis(maxSongs = 10)
+    songData,songLabelTemplate = process_songs(songs, n_vocab)
     nBatches = 1
     env = gym.make('Pong-v0')
-    agent = agent_model(env,nBatches)
+    agent = agent_model(env,nBatches,n_vocab)
     agent.summary()
 
     nIter = 10
