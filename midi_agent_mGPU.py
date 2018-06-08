@@ -11,6 +11,9 @@ from keras.callbacks import ModelCheckpoint
 from keras import Model
 from keras import backend as K
 from keras.utils import np_utils
+from keras.utils.multi_gpu_utils import multi_gpu_model
+from tensorflow.python.client import device_lib
+import tensorflow as tf
 #import pygame
 import os
 from music21.midi import realtime
@@ -22,7 +25,13 @@ import glob
 import pickle
 import numpy as np
 import gym
-def load_midis(maxSongs = None):
+
+# poll available gpus
+def get_available_gpus():
+    local_device_protos = device_lib.list_local_devices()
+    return [x.name for x in local_device_protos if x.device_type == 'GPU']
+
+def load_midis(maxSongs = 1):
     songs = []
     data = glob.glob("midi_songs/*.mid")
     if maxSongs is None:
@@ -32,7 +41,7 @@ def load_midis(maxSongs = None):
     for file in random.sample(data, n):
         notes = []
         midi = converter.parse(file)
-        print("Parsing %s" % file, end = '')
+        #print("Parsing %s" % file, end = '')
         notes_to_parse = None
         try: # file has instrument parts
             s2 = instrument.partitionByInstrument(midi)
@@ -94,10 +103,10 @@ def serialize_squish_noise(image, n = 4):
 
 def disc_song_model(n_vocab):
     songModel = Sequential()
-    songModel.add(LSTM(256, dropout = 0.3, return_sequences=True, input_shape=(None,1)))
+    songModel.add(LSTM(512, dropout = 0.3, return_sequences=True, input_shape=(None,1)))
     songModel.add(LSTM(256, dropout = 0.3, return_sequences=True))
     songModel.add(LSTM(256))
-    songModel.add(Dense(128))
+    songModel.add(Dense(256))
     songModel.add(Dropout(0.3))
     songModel.add(Dense(n_vocab))
     songModel.add(Activation('sigmoid'))
@@ -105,10 +114,10 @@ def disc_song_model(n_vocab):
 
 def gen_song_model(obs, n_vocab):
     songModel = Sequential()
-    songModel.add(LSTM(256, dropout = 0.3, return_sequences=True, input_shape=(None,) + obs.shape))
+    songModel.add(LSTM(512, dropout = 0.3, return_sequences=True, input_shape=(None,) + obs.shape))
     songModel.add(LSTM(256, dropout = 0.3, return_sequences=True))
     songModel.add(LSTM(256))
-    songModel.add(Dense(128))
+    songModel.add(Dense(256))
     songModel.add(Dropout(0.3))
     songModel.add(Dense(n_vocab))
     songModel.add(Activation('softmax'))
@@ -116,6 +125,11 @@ def gen_song_model(obs, n_vocab):
 
 class SequenceAgent:
     def __init__(self, env, actionModel, preprofunc = serialize):
+        
+        self.numGPUs = len(get_available_gpus())
+        #self.numGPUs = 1 
+        print('[INFO] number of GPUs: ', self.numGPUs)
+    
         self.preprocess = preprofunc
         i = actionModel.input
         hidden = actionModel(i)
@@ -130,12 +144,15 @@ class SequenceAgent:
 
         self.obsShape = self.preprocess(env.reset()).shape
         self.observationModel = voice
+        self.observationModelRef = voice
         self.criticModel = critic
+        self.criticModelRef = critic
         self.actionModel = aModel
+        self.actionModelRef = aModel
         self.reset_memory()
 
     def load_data(self):
-        songs, self.vocab = load_midis()
+        songs, self.vocab = load_midis(maxSongs = 10)
         self.data,songLabelTemplate = process_songs(songs, self.vocab)
 
     def gate(self, o, n = 2, k = 1):
@@ -167,9 +184,15 @@ class SequenceAgent:
         return a
 
     def compile(self, weights_path = 'checkpoints'):
-        self.observationModel = self.agenty_compile(self.observationModel)
-        self.actionModel = self.agenty_compile(self.actionModel)
+        self.observationModel, self.observationModelRef = self.agenty_compile(self.observationModel)
+        self.observationModel.summary()
+        self.actionModel, self.observationModelRef = self.agenty_compile(self.actionModel)
+        self.actionModel.summary()
+
+
+        if self.numGPUs > 1: self.criticModel, self.criticModelRef = self.make_multi_gpu(self.criticModel) 
         self.criticModel.compile(loss='binary_crossentropy', optimizer='rmsprop')
+        self.criticModel.summary()
 
         if(os.path.exists(weights_path + '/weights-midi-gen.hdf5')):
             self.observationModel.load_weights(weights_path + '/weights-midi-gen.hdf5')
@@ -192,7 +215,7 @@ class SequenceAgent:
     def process_reward(self,rew):
         self.rewardMemory.append(rew)
         if(not np.isclose(rew, 0.0)):
-            print("({} steps)".format(len(self.actMemory)))
+            print("Reward of {} encountered at step {}, learning".format(rew, len(self.rewardMemory)))
             K.set_learning_phase(1)
             disc = discount_rewards(self.rewardMemory)
             am = np.array(self.actMemory)
@@ -212,9 +235,9 @@ class SequenceAgent:
             actionModelRewards = np.reshape(disc, (len(self.rewardMemory),1))
             actionModelLosses = self.actionModel.train_on_batch(actionModelInputs, actionModelRewards)
             print(np.mean(disc))
-            print("Observation Model Losses: {}".format(obsModelLosses))
-            print("Critic Model Losses: {}".format(criticModelLosses))
-            print("Action Model Losses: {}".format(actionModelLosses))
+            print("Observation Model Losses: {}".format(obsModelLosses / len(self.actMemory)))
+            print("Critic Model Losses: {}".format(criticModelLosses / len(self.actMemory)))
+            print("Action Model Losses: {}".format(actionModelLosses / len(self.actMemory)))
             print("Critic Win Rate: {}".format(self.tally / len(self.actMemory)))
             K.set_learning_phase(0)
             self.reset_memory()
@@ -227,15 +250,36 @@ class SequenceAgent:
         self.tally = 0
 
     def save_weights(self, path = 'checkpoints'):
-        self.actionModel.save_weights(path + '/weights-tiny-brain.hdf5')
-        self.observationModel.save_weights(path + '/weights-midi-gen.hdf5')
-        self.criticModel.save_weights(path + '/weights-midi-critic.hdf5')
+        self.actionModelRef.save_weights(path + '/weights-tiny-brain.hdf5')
+        self.observationModelRef.save_weights(path + '/weights-midi-gen.hdf5')
+        self.criticModelRef.save_weights(weights_path + '/weights-midi-critic.hdf5')
 
+    def make_multi_gpu(self, model):
+        print("[INFO] training with {} GPUs...".format(self.numGPUs))
+        # store the model on every GPU and combine results from the gradient updates on the CPU
+        with tf.device("/cpu:0"):
+            ref_model = model
+
+        model = multi_gpu_model(ref_model, gpus=self.numGPUs)
+
+        return model, ref_model
+        
     def agenty_compile(self, model, lr = 1e-3):
         y = Input((1,))
         loss = lambda y,t: agenty_loss(y,t)
+
+        # single GPU
+        if self.numGPUs <= 1:
+            print("[INFO] training with 1 GPU...")
+            ref_model = model
+        # multiple GPUs
+        else:
+           model, ref_model = self.make_multi_gpu(model) 
+
         model.compile(optimizer='rmsprop', loss=loss)
-        return model
+
+        # should save weights on ref_model, not multi_gpu_model
+        return model, ref_model
 
     def summary(self):
         self.actionModel.summary()
@@ -243,7 +287,7 @@ class SequenceAgent:
         self.criticModel.summary()
 
 def agenty_loss(y,t):
-    return K.sum(K.square(t) * (-y)) + K.square((1 - y))
+    return (K.sum(t**2) * (-y)) + (1 - y)**2
 
 def discount_rewards(rewards, gamma = 0.99):
     discounted = np.zeros_like(rewards)
@@ -270,9 +314,9 @@ class DisplayBot:
         channels = 2    # 1 is mono, 2 is stereo
         buffer = 1024    # number of samples
         self.midi_stream = stream.Stream()
-        pygame.mixer.init(freq, bitsize, channels, buffer)
-        pygame.mixer.music.set_volume(0.8)
-        pygame.init()
+        #pygame.mixer.init(freq, bitsize, channels, buffer)
+        #pygame.mixer.music.set_volume(0.8)
+        #pygame.init()
         self.reset()
 
     def pattern_generator(self, rawNote):
@@ -301,6 +345,7 @@ class DisplayBot:
         self.offset = 0
 
 def __main__():
+    
     parser = argparse.ArgumentParser()
     parser.add_argument('--epochs', type=int, default=1000)
     parser.add_argument('--showAndTell', type=bool, default=False)
@@ -319,8 +364,7 @@ def __main__():
     done = False
     showAndTell = args.showAndTell
     obs = env.reset()
-    wins = 0
-    losses = 0
+    cumulative_reward = 0
     if(showAndTell):
         d = DisplayBot(env)
         r = realtime.StreamPlayer(d.midi_stream)
@@ -332,21 +376,15 @@ def __main__():
             env.render()
         decision = agent.act(note)
         obs, reward, done, _ = env.step(decision)
-        if(not np.isclose(reward, 0.0)):
-            if(reward < 0):
-                losses += 1
-            else:
-                wins += 1
-            print("Epoch {}: Score {}-{}".format(iterations, wins, losses), end = '')
         agent.process_reward(reward)
+        cumulative_reward += reward
         if(done):
-            print("Epoch {} ended with {} cumulative reward".format(iterations, wins - losses))
+            print("Epoch {} cumulative reward: {}".format(iterations,cumulative_reward))
             env.reset()
-            wins = 0
-            losses = 0
             agent.reset_memory()
             iterations += 1
-            if(iterations % 1 is 0):
+            cumulative_reward = 0
+            if(iterations % 10 is 0):
                 agent.save_weights()
 __main__();
 
