@@ -11,7 +11,7 @@ from keras.callbacks import ModelCheckpoint
 from keras import Model
 from keras import backend as K
 from keras.utils import np_utils
-import pygame
+#import pygame
 import os
 from music21.midi import realtime
 from music21 import converter, instrument, note, chord, stream
@@ -135,7 +135,7 @@ class SequenceAgent:
         self.reset_memory()
 
     def load_data(self):
-        songs, self.vocab = load_midis(maxSongs = 10)
+        songs, self.vocab = load_midis()
         self.data,songLabelTemplate = process_songs(songs, self.vocab)
 
     def gate(self, o, n = 2, k = 1):
