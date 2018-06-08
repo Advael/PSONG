@@ -10,11 +10,13 @@ from keras.optimizers import RMSprop
 from keras.callbacks import ModelCheckpoint
 from keras import Model
 from keras import backend as K
-from PIL import Image
 from keras.utils import np_utils
 from music21 import converter, instrument, note, chord
+from PIL import Image
+import matplotlib.pyplot as plt
+from IPython import display
+import cv2
 import random
-import pong_agent
 import glob
 import pickle
 import numpy as np
@@ -73,7 +75,6 @@ def train(model, network_input, network_output):
         mode='min'
     )
     callbacks_list = [checkpoint]
-    
     model.fit(network_input, network_output, epochs=200, batch_size=64, callbacks=callbacks_list)
 
 def visionModel(obs, batch_size):
@@ -87,88 +88,124 @@ def visionModel(obs, batch_size):
 def preprocess(image):
     """ prepro 210x160x3 uint8 frame into 6400 (80x80) 1D float vector """
     image = image[35:195] # crop
-    image = image[::2,::2,2] # downsample by factor of 2 and use the Blue color channel
+    image = image[::,::,2] # downsample by factor of 2 and use the Blue color channel
+    image = cv2.resize(image, (40,40))
     colors = np.stack(np.unique(image[:,:], return_counts = True)) 
     bgc = colors[0][np.argmax(colors[1])] #Find the most common color
     image[image != bgc] = 1
     image[image == bgc] = 0
-    return np.expand_dims(image.astype(np.float16), axis=2)
+    return image.astype(np.float64).ravel()
 
-def song_model(obs, batch_size, n_vocab):
+def gen_song_model(obs, n_vocab):
     songModel = Sequential()
-    songModel.add(Embedding(input_dim=400, output_dim=n_vocab, input_length=None, batch_input_shape = (batch_size,) + (400,)))
-    songModel.add(LSTM(512, dropout = 0.3, stateful = True, return_sequences=True))
-    songModel.add(LSTM(512, dropout = 0.3, stateful = True, return_sequences=True))
-    songModel.add(LSTM(512, dropout = 0.3, stateful = True))
+    songModel.add(LSTM(512, dropout = 0.3, return_sequences=True, input_shape=(None,) + obs.shape))
+    songModel.add(LSTM(512, dropout = 0.3, return_sequences=True))
+    songModel.add(LSTM(512))
+    songModel.add(Dense(257))
+    songModel.add(Dropout(0.3))
     songModel.add(Dense(n_vocab))
     songModel.add(Activation('softmax'))
     return songModel
 
-def agent_model(env, batch_size, n_vocab, lr = 1e-3):
-    obs = env.reset()
-    obs = preprocess(obs)
-    batch_size = 1
-    i = Input(shape = obs.shape, batch_shape = (batch_size,) + obs.shape)
-    eyes = visionModel(obs, batch_size)
-    seen = eyes(i)
-    voice = song_model(obs, batch_size, songs = 10)
-    song = voice(seen)
-    midiModel = Model(inputs = i, outputs = song)
-    midiModel.summary()
-    action = Dense(env.action_space.n)(song)
-    action = Activation('softmax')(action)
-    agent = Model(inputs = i, outputs = action)
-    y = agent.output
-    t = Input(y.shape)
-    loss = lambda y,t: -t
-    agent.compile(RMSprop(lr=lr), loss)
-    return agent
+class SequenceAgent:
+    def __init__(self, obsModel, actionModel, env, gamma = .99, lr = 1e-3):
+        i = actionModel.input
+        hidden = actionModel(i)
+        action = Dense(env.action_space.n)(hidden)
+
+        action = Activation('softmax')(action)
+        aModel = Model(inputs = i, outputs = action)
+        self.obsShape = preprocess(env.reset()).shape
+        self.observationModel = self.agenty_compile(obsModel)
+        self.actionModel = self.agenty_compile(aModel)
+        self.reset_memory()
+
+    def decide(self, obs):
+        o = preprocess(obs)
+        self.obsMemory.append(o)
+        obsSeq = np.reshape(np.array(self.obsMemory), (1, len(self.obsMemory)) + o.shape)
+        p = self.observationModel.predict(obsSeq)
+        print(p)
+        a = np.argmax(p)
+        self.actMemory.append(a)
+        act = self.actionModel.predict(np.expand_dims(a, axis=0))
+        choice = probArgMax(act[0])
+        return choice
+
+    def process_reward(self,rew):
+        self.rewardMemory.append(rew)
+        if(not np.isclose(rew, 0.0)):
+            print("Reward of {} encountered at step {}, learning".format(rew, len(self.rewardMemory)))
+            K.set_learning_phase(1)
+            disc = discount_rewards(self.rewardMemory)
+            am = np.array(self.actMemory)
+            #rm = np.array(self.rewardMemory)
+            #print(am.shape, rm.shape)
+            actionModelInputs = np.reshape(am, (len(self.actMemory),1))
+            actionModelRewards = np.reshape(disc, (len(self.rewardMemory),1))
+            self.actionModel.train_on_batch(actionModelInputs, actionModelRewards)
+            for x in range(1,len(self.rewardMemory)+1):
+                print('.', end = ''),
+                obsModelInputs = np.reshape(np.array(self.obsMemory[:x]), (1, len(self.obsMemory[:x])) + self.obsShape)
+                obsModelRewards = np.reshape(disc[x-1], (1, 1))
+                self.observationModel.train_on_batch(obsModelInputs, obsModelRewards)
+            K.set_learning_phase(0)
+            self.reset_memory()
+            print("!")
+
+    def reset_memory(self):
+        self.actMemory = []
+        self.obsMemory = []
+        self.rewardMemory = []
+
+    def agenty_compile(self, model, lr = 1e-3):
+        y = model.output
+        t = Input(y.shape)
+        loss = lambda y,t: 1.0-t / 2.0 #Naive AF online RL loss function
+        model.compile(RMSprop(lr=lr), loss)
+        return model
 
 def discount_rewards(rewards, gamma = 0.99):
-    discounted = K.zeros_like(rewards)
+    discounted = np.zeros_like(rewards)
+    accumulator = 0
     for x in reversed(range(len(rewards))):
         accumulator *= gamma
         accumulator += rewards[x]
-        rewards[x] = accumulator
+        discounted[x] = accumulator
     return discounted
 
+def probArgMax(x):
+    return np.random.choice(range(x.size), p=x)
+
 def __main__():
-    K.set_learning_phase(1)
-    songs, n_vocab = load_midis(maxSongs = 10)
+    K.set_learning_phase(0)
+    songs, n_vocab = load_midis(maxSongs = 1)
     songData,songLabelTemplate = process_songs(songs, n_vocab)
-    nBatches = 1
     env = gym.make('Pong-v0')
-    agent = agent_model(env,nBatches,n_vocab)
-    agent.summary()
+    obs = preprocess(env.reset())
+    songModel = gen_song_model(obs, n_vocab)
+    tinybrain = Sequential()
+    tinybrain.add(Dense(128, input_shape=(1,)))
+    agent = SequenceAgent(songModel,tinybrain,env)
+    agent.actionModel.summary()
+    agent.observationModel.summary()
 
     nIter = 10
     iterations = 0
     done = False
-    obs = [preprocess(env.reset())]
-    batch = K.stack(obs,axis=0)
-    print(batch.shape)
-    actions = []
-    rewards = []
+    obs = env.reset()
+    cumulative_reward = 0
     while iterations < nIter:
-        actions.append(agent.predict_on_batch(batch))
-        print(notes[-1])
-        steps = 0
-        obs[0], reward, done, _ = env.step(actions[-1])
-        obs[0] = preprocess(obs[0])
-        rewards.append(reward)
-        batch = K.stack(obs,axis=0)
-        agent.save_reward(reward)
-        if reward is not 0 or done[x]:
-            K.set_learning_phase(1)
-            print("Reward {} at step {}".format(reward, steps))
-            iterations += 1
-            agent.train_on_batch(K.convert_to_tensor(actions), discount_rewards(K.convert_to_tensor(np.array(rewards))))
+        decision = agent.decide(obs)
+        obs, reward, done, _ = env.step(decision)
+        #env.render()
+        agent.process_reward(reward)
+        cumulative_reward += reward
+        if(done):
+            print("Epoch {} cumulative reward: {}".format(iterations,cumulative_reward))
             env.reset()
-            rewards = []
-            actions = []
-            if(done):
-                done= False
-                print("Batch {} reached 'Done' at step {}".format(x, steps[x]))
-            steps += 1
-            K.set_learning_phase(0)
-__main__()
+            agent.reset_memory()
+            iterations += 1
+            cumulative_reward = 0
+__main__();
+
