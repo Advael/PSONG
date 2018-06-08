@@ -243,7 +243,7 @@ class SequenceAgent:
         self.criticModel.summary()
 
 def agenty_loss(y,t):
-    return (t ** 0 - y)**2
+    return (K.sum(t**2) * (-y)) + (1 - y)**2
 
 def discount_rewards(rewards, gamma = 0.99):
     discounted = np.zeros_like(rewards)
@@ -269,13 +269,15 @@ class DisplayBot:
         bitsize = -16   # unsigned 16 bit
         channels = 2    # 1 is mono, 2 is stereo
         buffer = 1024    # number of samples
+        self.midi_stream = stream.Stream()
         pygame.mixer.init(freq, bitsize, channels, buffer)
         pygame.mixer.music.set_volume(0.8)
-        self.midi_stream = stream.Stream()
+        pygame.init()
+        self.reset()
 
     def pattern_generator(self, rawNote):
         index = (rawNote * self.vocab).astype(np.int)
-        pattern = int_to_note[index]
+        pattern = self.int_to_note[index]
         if ('.' in pattern) or pattern.isdigit():
             notes_in_chord = pattern.split('.')
             notes = []
@@ -324,21 +326,20 @@ def __main__():
         r.play()
     while iterations < nIter:
         note = agent.observe(obs)
+        if(showAndTell):
+            d.pattern_generator(note)
+            env.render()
         decision = agent.act(note)
         obs, reward, done, _ = env.step(decision)
-        if(showAndTell):
-            DisplayBot.pattern_generator(note)
-            env.render()
         agent.process_reward(reward)
         cumulative_reward += reward
         if(done):
             print("Epoch {} cumulative reward: {}".format(iterations,cumulative_reward))
-
             env.reset()
             agent.reset_memory()
             iterations += 1
             cumulative_reward = 0
-            if(iterations % 100 is 0):
+            if(iterations % 10 is 0):
                 agent.save_weights()
 __main__();
 
