@@ -11,11 +11,10 @@ from keras.callbacks import ModelCheckpoint
 from keras import Model
 from keras import backend as K
 from keras.utils import np_utils
+import pygame
 import os
-from music21 import converter, instrument, note, chord
-from PIL import Image
-import matplotlib.pyplot as plt
-from IPython import display
+from music21.midi import realtime
+from music21 import converter, instrument, note, chord, stream
 import argparse
 import cv2
 import random
@@ -161,6 +160,7 @@ class SequenceAgent:
 
         if(realAgreement > fakeAgreement):
             winner = real
+            self.tally += 1
         else:
             winner = fake
         a = winner / self.vocab
@@ -178,12 +178,14 @@ class SequenceAgent:
         if(os.path.exists(weights_path + '/weights-tiny-brain.hdf5')):
             self.actionModel.load_weights(weights_path + '/weights-tiny-brain.hdf5')
 
-    def decide(self, obs):
+    def observe(self, obs):
         o = self.preprocess(obs)
         self.obsMemory.append(o)
-        a = self.gate(o)
-        self.actMemory.append(a)
-        act = self.actionModel.predict(np.expand_dims(a, axis=0))
+        return self.gate(o)
+
+    def act(self, actionable):
+        self.actMemory.append(actionable)
+        act = self.actionModel.predict(np.expand_dims(actionable, axis=0))
         choice = probArgMax(act[0])
         return choice
 
@@ -210,9 +212,10 @@ class SequenceAgent:
             actionModelRewards = np.reshape(disc, (len(self.rewardMemory),1))
             actionModelLosses = self.actionModel.train_on_batch(actionModelInputs, actionModelRewards)
             print(np.mean(disc))
-            print("Observation Model Losses: {}".format(obsModelLosses))
-            print("Critic Model Losses: {}".format(criticModelLosses))
-            print("Action Model Losses: {}".format(actionModelLosses))
+            print("Observation Model Losses: {}".format(obsModelLosses / len(self.actMemory)))
+            print("Critic Model Losses: {}".format(criticModelLosses / len(self.actMemory)))
+            print("Action Model Losses: {}".format(actionModelLosses / len(self.actMemory)))
+            print("Critic Win Rate: {}".format(self.tally / len(self.actMemory)))
             K.set_learning_phase(0)
             self.reset_memory()
 
@@ -221,6 +224,7 @@ class SequenceAgent:
         self.obsMemory = []
         self.rewardMemory = []
         self.criticMemory = []
+        self.tally = 0
 
     def save_weights(self, path = 'checkpoints'):
         self.actionModel.save_weights(path + '/weights-tiny-brain.hdf5')
@@ -229,7 +233,7 @@ class SequenceAgent:
 
     def agenty_compile(self, model, lr = 1e-3):
         y = Input((1,))
-        loss = lambda y,t: agenty_loss(t)
+        loss = lambda y,t: agenty_loss(y,t)
         model.compile(optimizer='rmsprop', loss=loss)
         return model
 
@@ -238,10 +242,8 @@ class SequenceAgent:
         self.observationModel.summary()
         self.criticModel.summary()
 
-def agenty_loss(y):
-    print(y)
-    return (1.0-y)/2.0
-
+def agenty_loss(y,t):
+    return (t ** 0 - y)**2
 
 def discount_rewards(rewards, gamma = 0.99):
     discounted = np.zeros_like(rewards)
@@ -255,10 +257,51 @@ def discount_rewards(rewards, gamma = 0.99):
 def probArgMax(x):
     return np.random.choice(range(x.size), p=x)
 
+class DisplayBot:
+    def __init__(self, env):
+        self.env = env
+        with open('data/notes', 'rb') as filepath:
+            notes = pickle.load(filepath)
+        self.pitchnames = sorted(set(item for item in notes))
+        self.int_to_note = dict((number, note) for number, note in enumerate(self.pitchnames))
+        self.vocab = len(set(notes))
+        freq = 44100    # audio CD quality
+        bitsize = -16   # unsigned 16 bit
+        channels = 2    # 1 is mono, 2 is stereo
+        buffer = 1024    # number of samples
+        pygame.mixer.init(freq, bitsize, channels, buffer)
+        pygame.mixer.music.set_volume(0.8)
+        self.midi_stream = stream.Stream()
+
+    def pattern_generator(self, rawNote):
+        index = (rawNote * self.vocab).astype(np.int)
+        pattern = int_to_note[index]
+        if ('.' in pattern) or pattern.isdigit():
+            notes_in_chord = pattern.split('.')
+            notes = []
+            for current_note in notes_in_chord:
+                new_note = note.Note(int(current_note))
+                new_note.storedInstrument = instrument.Piano()
+                notes.append(new_note)
+            new_chord = chord.Chord(notes)
+            new_chord.offset = self.offset
+            n = new_chord
+        # pattern is a note
+        else:
+            new_note = note.Note(pattern)
+            new_note.offset = self.offset
+            new_note.storedInstrument = instrument.Piano()
+            n = new_note
+        self.offset += 0.5
+        self.midi_stream.append(n)
+
+    def reset(self):
+        self.offset = 0
 
 def __main__():
     parser = argparse.ArgumentParser()
     parser.add_argument('--epochs', type=int, default=1000)
+    parser.add_argument('--showAndTell', type=bool, default=False)
     args = parser.parse_args()
 
     K.set_learning_phase(0)
@@ -272,12 +315,20 @@ def __main__():
     nIter = args.epochs
     iterations = 0
     done = False
+    showAndTell = args.showAndTell
     obs = env.reset()
     cumulative_reward = 0
+    if(showAndTell):
+        d = DisplayBot(env)
+        r = realtime.StreamPlayer(d.midi_stream)
+        r.play()
     while iterations < nIter:
-        decision = agent.decide(obs)
+        note = agent.observe(obs)
+        decision = agent.act(note)
         obs, reward, done, _ = env.step(decision)
-        #env.render()
+        if(showAndTell):
+            DisplayBot.pattern_generator(note)
+            env.render()
         agent.process_reward(reward)
         cumulative_reward += reward
         if(done):
