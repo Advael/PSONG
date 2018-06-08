@@ -94,10 +94,10 @@ def serialize_squish_noise(image, n = 4):
 
 def disc_song_model(n_vocab):
     songModel = Sequential()
-    songModel.add(LSTM(512, dropout = 0.3, return_sequences=True, input_shape=(None,1)))
-    songModel.add(LSTM(512, dropout = 0.3, return_sequences=True))
-    songModel.add(LSTM(512))
-    songModel.add(Dense(256))
+    songModel.add(LSTM(256, dropout = 0.3, return_sequences=True, input_shape=(None,1)))
+    songModel.add(LSTM(256, dropout = 0.3, return_sequences=True))
+    songModel.add(LSTM(256))
+    songModel.add(Dense(128))
     songModel.add(Dropout(0.3))
     songModel.add(Dense(n_vocab))
     songModel.add(Activation('sigmoid'))
@@ -105,10 +105,10 @@ def disc_song_model(n_vocab):
 
 def gen_song_model(obs, n_vocab):
     songModel = Sequential()
-    songModel.add(LSTM(512, dropout = 0.3, return_sequences=True, input_shape=(None,) + obs.shape))
-    songModel.add(LSTM(512, dropout = 0.3, return_sequences=True))
-    songModel.add(LSTM(512))
-    songModel.add(Dense(256))
+    songModel.add(LSTM(256, dropout = 0.3, return_sequences=True, input_shape=(None,) + obs.shape))
+    songModel.add(LSTM(256, dropout = 0.3, return_sequences=True))
+    songModel.add(LSTM(256))
+    songModel.add(Dense(128))
     songModel.add(Dropout(0.3))
     songModel.add(Dense(n_vocab))
     songModel.add(Activation('softmax'))
@@ -192,7 +192,7 @@ class SequenceAgent:
     def process_reward(self,rew):
         self.rewardMemory.append(rew)
         if(not np.isclose(rew, 0.0)):
-            print("Reward of {} encountered at step {}, learning".format(rew, len(self.rewardMemory)))
+            print("({} steps)".format(len(self.actMemory)))
             K.set_learning_phase(1)
             disc = discount_rewards(self.rewardMemory)
             am = np.array(self.actMemory)
@@ -212,9 +212,9 @@ class SequenceAgent:
             actionModelRewards = np.reshape(disc, (len(self.rewardMemory),1))
             actionModelLosses = self.actionModel.train_on_batch(actionModelInputs, actionModelRewards)
             print(np.mean(disc))
-            print("Observation Model Losses: {}".format(obsModelLosses / len(self.actMemory)))
-            print("Critic Model Losses: {}".format(criticModelLosses / len(self.actMemory)))
-            print("Action Model Losses: {}".format(actionModelLosses / len(self.actMemory)))
+            print("Observation Model Losses: {}".format(obsModelLosses))
+            print("Critic Model Losses: {}".format(criticModelLosses))
+            print("Action Model Losses: {}".format(actionModelLosses))
             print("Critic Win Rate: {}".format(self.tally / len(self.actMemory)))
             K.set_learning_phase(0)
             self.reset_memory()
@@ -243,7 +243,7 @@ class SequenceAgent:
         self.criticModel.summary()
 
 def agenty_loss(y,t):
-    return (K.sum(t**2) * (-y)) + (1 - y)**2
+    return K.sum(K.square(t) * (-y)) + K.square((1 - y))
 
 def discount_rewards(rewards, gamma = 0.99):
     discounted = np.zeros_like(rewards)
@@ -319,7 +319,8 @@ def __main__():
     done = False
     showAndTell = args.showAndTell
     obs = env.reset()
-    cumulative_reward = 0
+    wins = 0
+    losses = 0
     if(showAndTell):
         d = DisplayBot(env)
         r = realtime.StreamPlayer(d.midi_stream)
@@ -331,14 +332,20 @@ def __main__():
             env.render()
         decision = agent.act(note)
         obs, reward, done, _ = env.step(decision)
+        if(not np.isclose(reward, 0.0)):
+            if(reward < 0):
+                losses += 1
+            else:
+                wins += 1
+            print("Epoch {}: Score {}-{}".format(iterations, wins, losses), end = '')
         agent.process_reward(reward)
-        cumulative_reward += reward
         if(done):
-            print("Epoch {} cumulative reward: {}".format(iterations,cumulative_reward))
+            print("Epoch {} ended with {} cumulative reward".format(iterations, wins - losses))
             env.reset()
+            wins = 0
+            losses = 0
             agent.reset_memory()
             iterations += 1
-            cumulative_reward = 0
             if(iterations % 10 is 0):
                 agent.save_weights()
 __main__();
