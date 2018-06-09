@@ -339,7 +339,7 @@ def __main__():
             agent.reset_memory()
             iterations += 1
             cumulative_reward = 0
-            if(iterations % 10 is 0):
+            if(iterations % 1 is 0):
                 agent.save_weights()
 __main__();
 
