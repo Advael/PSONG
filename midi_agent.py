@@ -209,7 +209,6 @@ class SequenceAgent:
         K.set_learning_phase(1)
         disc = discount_rewards(self.rewardMemory)
         am = np.array(self.actMemory)
-        if(self.
         criticModelLosses = 0
         random.shuffle(self.criticMemory)
         for x in self.criticMemory:
