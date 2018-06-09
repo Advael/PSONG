@@ -229,7 +229,7 @@ class SequenceAgent:
     def save_weights(self, path = 'checkpoints'):
         self.actionModel.save_weights(path + '/weights-tiny-brain.hdf5')
         self.observationModel.save_weights(path + '/weights-midi-gen.hdf5')
-        self.criticModel.save_weights(weights_path + '/weights-midi-critic.hdf5')
+        self.criticModel.save_weights(path + '/weights-midi-critic.hdf5')
 
     def agenty_compile(self, model, lr = 1e-3):
         y = Input((1,))
