@@ -117,6 +117,8 @@ def gen_song_model(obs, n_vocab):
 class SequenceAgent:
     def __init__(self, env, actionModel, preprofunc = serialize):
         self.preprocess = preprofunc
+        self.is_training = False
+        self.gate_active = False
         i = actionModel.input
         hidden = actionModel(i)
         action = Dense(env.action_space.n)(hidden)
@@ -139,31 +141,34 @@ class SequenceAgent:
         self.data,songLabelTemplate = process_songs(songs, self.vocab)
 
     def gate(self, o, n = 2, k = 1):
-        l = len(self.actMemory)
-        candidates = [d for d in self.data if d.shape[0] > l]
-        c = candidates[np.random.randint(0,len(candidates))]
         obsSeq = np.reshape(np.array(self.obsMemory), (1, len(self.obsMemory)) + o.shape)
-        if l < 1:
-            realPrefix = np.reshape(np.array([-1.0]), (1,1,1))
-            fakePrefix = np.reshape(np.array([-1.0]), (1,1,1))
-        else:
-            realPrefix = np.reshape(c[:l], (1,l,1))
-            fakePrefix = np.reshape(np.array(self.actMemory), (1,l,1))
-
         fake = np.argmax(self.observationModel.predict(obsSeq))
-        real = (c[l] * self.vocab).astype(np.int)
-        realPred = self.criticModel.predict(realPrefix)
-        fakePred = self.criticModel.predict(fakePrefix)
-        self.criticMemory.append(np.append(realPrefix,fakePrefix,axis=0))
-        realAgreement = realPred[0][real]
-        fakeAgreement = fakePred[0][fake]
+        if(self.gate_active):
+            l = len(self.actMemory)
+            candidates = [d for d in self.data if d.shape[0] > l]
+            c = candidates[np.random.randint(0,len(candidates))]
+            if l < 1:
+                realPrefix = np.reshape(np.array([-1.0]), (1,1,1))
+                fakePrefix = np.reshape(np.array([-1.0]), (1,1,1))
+            else:
+                realPrefix = np.reshape(c[:l], (1,l,1))
+                fakePrefix = np.reshape(np.array(self.actMemory), (1,l,1))
 
-        if(realAgreement > fakeAgreement):
-            winner = real
-            self.tally += 1
+            real = (c[l] * self.vocab).astype(np.int)
+            realPred = self.criticModel.predict(realPrefix)
+            fakePred = self.criticModel.predict(fakePrefix)
+            self.criticMemory.append(np.append(realPrefix,fakePrefix,axis=0))
+            realAgreement = realPred[0][real]
+            fakeAgreement = fakePred[0][fake]
+
+            if(realAgreement > fakeAgreement):
+                winner = real
+                self.tally += 1
+            else:
+                winner = fake
+            a = winner / self.vocab
         else:
-            winner = fake
-        a = winner / self.vocab
+            a = fake / self.vocab
         return a
 
     def compile(self, weights_path = 'checkpoints'):
@@ -196,31 +201,35 @@ class SequenceAgent:
         self.rewardMemory.append(rew)
         if(not np.isclose(rew, 0.0)):
             print("({} steps)".format(len(self.actMemory)))
-            K.set_learning_phase(1)
-            disc = discount_rewards(self.rewardMemory)
-            am = np.array(self.actMemory)
-            criticModelLosses = 0
-            random.shuffle(self.criticMemory)
-            for x in self.criticMemory:
-                criticModelInputs = x
-                criticModelLabels = np.vstack([np.ones(self.vocab), np.zeros(self.vocab)])
-                criticModelLosses += self.criticModel.train_on_batch(criticModelInputs, criticModelLabels)
-            obsModelLosses = 0
-            for x in range(1,len(self.rewardMemory)+1):
-                #print('.', end = ''),
-                obsModelInputs = np.reshape(np.array(self.obsMemory[:x]), (1, len(self.obsMemory[:x])) + self.obsShape)
-                obsModelRewards = np.reshape(disc[x-1], (1, 1))
-                obsModelLosses += self.observationModel.train_on_batch(obsModelInputs, obsModelRewards)
-            actionModelInputs = np.reshape(am, (len(self.actMemory),1))
-            actionModelRewards = np.reshape(disc, (len(self.rewardMemory),1))
-            actionModelLosses = self.actionModel.train_on_batch(actionModelInputs, actionModelRewards)
-            print(np.mean(disc))
-            print("Observation Model Losses: {}".format(obsModelLosses))
-            print("Critic Model Losses: {}".format(criticModelLosses))
-            print("Action Model Losses: {}".format(actionModelLosses))
-            print("Critic Win Rate: {}".format(self.tally / len(self.actMemory)))
-            K.set_learning_phase(0)
+            if(self.is_training):
+                train()
             self.reset_memory()
+
+    def train(self):
+        K.set_learning_phase(1)
+        disc = discount_rewards(self.rewardMemory)
+        am = np.array(self.actMemory)
+        criticModelLosses = 0
+        random.shuffle(self.criticMemory)
+        for x in self.criticMemory:
+            criticModelInputs = x
+            criticModelLabels = np.vstack([np.ones(self.vocab), np.zeros(self.vocab)])
+            criticModelLosses += self.criticModel.train_on_batch(criticModelInputs, criticModelLabels)
+        obsModelLosses = 0
+        for x in range(1,len(self.rewardMemory)+1):
+            #print('.', end = ''),
+            obsModelInputs = np.reshape(np.array(self.obsMemory[:x]), (1, len(self.obsMemory[:x])) + self.obsShape)
+            obsModelRewards = np.reshape(disc[x-1], (1, 1))
+            obsModelLosses += self.observationModel.train_on_batch(obsModelInputs, obsModelRewards)
+        actionModelInputs = np.reshape(am, (len(self.actMemory),1))
+        actionModelRewards = np.reshape(disc, (len(self.rewardMemory),1))
+        actionModelLosses = self.actionModel.train_on_batch(actionModelInputs, actionModelRewards)
+        print(np.mean(disc))
+        print("Observation Model Losses: {}".format(obsModelLosses))
+        print("Critic Model Losses: {}".format(criticModelLosses))
+        print("Action Model Losses: {}".format(actionModelLosses))
+        print("Critic Win Rate: {}".format(self.tally / len(self.actMemory)))
+        K.set_learning_phase(0)
 
     def reset_memory(self):
         self.actMemory = []
@@ -246,7 +255,7 @@ class SequenceAgent:
         self.criticModel.summary()
 
 def agenty_loss(y,t):
-    return K.sum(K.square(t) * (-y)) + K.square((1 - y))
+    return K.square(t ** 0 - y)
 
 def discount_rewards(rewards, gamma = 0.99):
     discounted = np.zeros_like(rewards)
@@ -307,6 +316,8 @@ def __main__():
     parser = argparse.ArgumentParser()
     parser.add_argument('--epochs', type=int, default=1000)
     parser.add_argument('--showAndTell', type=bool, default=False)
+    parser.add_argument('--train', type=bool, default=False)
+    parser.add_argument('--useGate', type=bool, default=True)
     args = parser.parse_args()
 
     K.set_learning_phase(0)
@@ -316,6 +327,10 @@ def __main__():
     agent = SequenceAgent(env,tinybrain,preprofunc = serialize_squish_noise)
     agent.summary()
     agent.compile()
+    if(args.train):
+        agent.is_training = True
+    if(args.useGate):
+        agent.gate_active = True
 
     nIter = args.epochs
     iterations = 0
@@ -324,14 +339,14 @@ def __main__():
     obs = env.reset()
     wins = 0
     losses = 0
-    if(showAndTell):
-        d = DisplayBot(env)
-        r = realtime.StreamPlayer(d.midi_stream)
-        r.play()
+#    if(showAndTell):
+#        d = DisplayBot(env)
+#        r = realtime.StreamPlayer(d.midi_stream)
+#        r.play()
     while iterations < nIter:
         note = agent.observe(obs)
         if(showAndTell):
-            d.pattern_generator(note)
+#            d.pattern_generator(note)
             env.render()
         decision = agent.act(note)
         obs, reward, done, _ = env.step(decision)
