@@ -1,21 +1,25 @@
 from midi import *
 from sys import argv
 from copy import deepcopy
+from multiprocessing import Process
 import midi.sequencer as sequencer
 import time
 import socket
 import os
 
 ##################################### Usage #########################################
-# fileToNotes reads a midi file and returns a list of notes in order without        #
-# spacing, one note per key press                                                   #
-#                                                                                   #
 # fileToTickNotes reads a midi file and returns a list of the active notes at each  #
 # tick of the song; if more than one key is pressed it takes the most recent        #
-# I believe this is the one we want to use, possibly sampling every nth tick        #
+# This is the one we want to use, possibly sampling every nth tick                  #
 #                                                                                   #
-# There is the potential for other ways of dealing with multiple simultaneous notes #
-# but this way is simple and effective                                              #
+# daemonStart opens a daemon that listens to a socket and forewards note info to    #
+# a midi server running on client 128, port 0                                       #
+# To send notes to it, call stageClient with a list of notes, like so:              #
+#                                                                                   #
+# p = daemonStart()                                                                 #
+# if len(argv) > 1:                                                                 #
+#   stageClient(list(fileToTickNotes(argv[1])))                                     #
+# daemonEnd(p)                                                                      #
 #####################################################################################
 
 def fileToNotes(f):
@@ -57,17 +61,16 @@ def stageToSeq(tickNotes):
   seq.subscribe_port(client, port)
   seq.start_sequencer()
   for tick in range(len(tickNotes)):
-    # create an event
     buf = None
     if (tick-1 < 0) or tickNotes[tick] != tickNotes[tick-1] and tickNotes[tick] != 0:
       event = NoteOnEvent()
-      event.tick = 3*tick
+      event.tick = tick
       event.set_pitch(tickNotes[tick])
       event.set_velocity(40)
       buf = seq.event_write(event, False, False, True)
     if (tick+1 >= len(tickNotes)) or tickNotes[tick] != tickNotes[tick+1] and tickNotes[tick] != 0:
       event = NoteOffEvent()
-      event.tick = 3*tick+1
+      event.tick = tick+1
       event.set_pitch(tickNotes[tick])
       event.set_velocity(40)
       buf = seq.event_write(event, False, False, True)
@@ -77,9 +80,61 @@ def stageToSeq(tickNotes):
       time.sleep(.1)
   time.sleep(30)
 
-#def stageDaemon(socket):
-  
+def stageDaemon(client, port, filename):
+  seq = sequencer.SequencerWrite()
+  seq.subscribe_port(client, port)
+  seq.start_sequencer()
+  tempo = SetTempoEvent()
+  tempo.set_bpm(60)
+  sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+  sock.bind(filename)
+  sock.listen(10)
 
-if len(argv) > 1:
-#  print(list(map(singleNote, fileToTicks(argv[1]))))
-  stageToSeq(list(map(singleNote, fileToTicks(argv[1]))))
+  conn,addr = sock.accept()
+  tick = 0
+  lastNote = 0
+  while True:
+    data = conn.recv(1000)
+    notes = map(lambda b: int(b), data)
+    for note in notes:
+      tick+=5
+      buf = None
+      if note != lastNote:
+        if lastNote != 0:
+          event = NoteOffEvent()
+          event.tick = tick
+          event.set_pitch(note)
+          event.set_velocity(40)
+          buf = seq.event_write(event, False, False, True)
+        if note == 0:
+          tick+=5
+        else:
+          event = NoteOnEvent()
+          event.tick = tick
+          event.set_pitch(note)
+          event.set_velocity(40)
+          buf = seq.event_write(event, False, False, True)
+      lastNote = note
+      if buf == None:
+        continue
+    time.sleep(.1)
+
+def stageClient(notes):
+  sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+  sock.connect("./note_feed")
+  for note in notes:
+    sock.send(pack('!b',note))
+  sock.close()
+
+def daemonStart():
+  p = Process(target = stageDaemon, args=(128,0,"./note_feed"))
+  p.start()
+  return p
+
+def daemonEnd(p):
+  p.join()
+
+#p = daemonStart()                                                                 #
+#if len(argv) > 1:                                                                 #
+#  stageClient(list(fileToTickNotes(argv[1])))                                     #
+#daemonEnd(p)                                                                      #

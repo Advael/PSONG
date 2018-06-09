@@ -202,7 +202,7 @@ class SequenceAgent:
         if(not np.isclose(rew, 0.0)):
             print("({} steps)".format(len(self.actMemory)))
             if(self.is_training):
-                train()
+                self.train()
             self.reset_memory()
 
     def train(self):
@@ -315,9 +315,12 @@ class DisplayBot:
 def __main__():
     parser = argparse.ArgumentParser()
     parser.add_argument('--epochs', type=int, default=1000)
-    parser.add_argument('--showAndTell', type=bool, default=False)
-    parser.add_argument('--train', type=bool, default=False)
-    parser.add_argument('--useGate', type=bool, default=True)
+    parser.add_argument('--show-and-tell', dest='showAndTell', action='store_true')
+    parser.add_argument('--train', dest='train', action='store_true')
+    parser.add_argument('--no-use-gate', dest='useGate', action='store_false')
+    parser.set_defaults(train = False)
+    parser.set_defaults(useGate = True)
+    parser.set_defaults(showAndTell = False)
     args = parser.parse_args()
 
     K.set_learning_phase(0)
@@ -364,7 +367,7 @@ def __main__():
             losses = 0
             agent.reset_memory()
             iterations += 1
-            if(iterations % 1 is 0):
+            if(agent.is_training and iterations % 1 is 0):
                 agent.save_weights()
 __main__();
 
