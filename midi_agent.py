@@ -173,10 +173,13 @@ class SequenceAgent:
 
         if(os.path.exists(weights_path + '/weights-midi-gen.hdf5')):
             self.observationModel.load_weights(weights_path + '/weights-midi-gen.hdf5')
+            print("Observation model loaded checkpoint")
         if(os.path.exists(weights_path + '/weights-midi-critic.hdf5')):
             self.criticModel.load_weights(weights_path + '/weights-midi-critic.hdf5')
+            print("Critic model loaded checkpoint")
         if(os.path.exists(weights_path + '/weights-tiny-brain.hdf5')):
             self.actionModel.load_weights(weights_path + '/weights-tiny-brain.hdf5')
+            print("Action model loaded checkpoint")
 
     def observe(self, obs):
         o = self.preprocess(obs)
