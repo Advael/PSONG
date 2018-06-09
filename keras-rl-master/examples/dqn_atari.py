@@ -34,6 +34,7 @@ class AtariProcessor(Processor):
         # We could perform this processing step in `process_observation`. In this case, however,
         # we would need to store a `float32` array instead, which is 4x more memory intensive than
         # an `uint8` array. This matters if we store 1M observations.
+        print(batch.shape)
         processed_batch = batch.astype('float32') / 255.
         return processed_batch
 
