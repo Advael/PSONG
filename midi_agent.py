@@ -66,6 +66,7 @@ def process_songs(songs, n_vocab):
     network_output = np_utils.to_categorical(network_output)
     return (network_input, network_output)
 
+
 def bitsquish(bits):
     y = 0
     for i,j in enumerate(bits):
@@ -100,7 +101,7 @@ def disc_song_model(n_vocab):
     songModel.add(Dense(128))
     songModel.add(Dropout(0.3))
     songModel.add(Dense(n_vocab))
-    songModel.add(Activation('sigmoid'))
+    songModel.add(Activation('softmax'))
     return songModel
 
 def gen_song_model(obs, n_vocab):
@@ -129,6 +130,11 @@ class SequenceAgent:
 
         voice = gen_song_model(self.preprocess(env.reset()), self.vocab)
         critic = disc_song_model(self.vocab)
+        v = voice.input
+        real = critic.input
+        fake = Input(real.shape)
+
+        info = voice(v)
 
         self.obsShape = self.preprocess(env.reset()).shape
         self.observationModel = voice
@@ -137,8 +143,15 @@ class SequenceAgent:
         self.reset_memory()
 
     def load_data(self):
-        songs, self.vocab = load_midis()
-        self.data,songLabelTemplate = process_songs(songs, self.vocab)
+        with open('data/notes', 'rb') as filepath:
+            notes = pickle.load(filepath)
+        pitchnames = sorted(set(item for item in notes))
+        self.vocab = len(set(notes))
+        if(self.is_training):
+            songs, v = load_midis()
+            if v != vocab:
+                print("dataset does not match model, weights will be invalid for data")
+            self.data,self.songLabelTemplate = process_songs(songs, self.vocab)
 
     def gate(self, o, n = 2, k = 1):
         obsSeq = np.reshape(np.array(self.obsMemory), (1, len(self.obsMemory)) + o.shape)
@@ -209,7 +222,6 @@ class SequenceAgent:
         K.set_learning_phase(1)
         disc = discount_rewards(self.rewardMemory)
         am = np.array(self.actMemory)
-        if(self.
         criticModelLosses = 0
         random.shuffle(self.criticMemory)
         for x in self.criticMemory:
@@ -227,9 +239,10 @@ class SequenceAgent:
         actionModelLosses = self.actionModel.train_on_batch(actionModelInputs, actionModelRewards)
         print(np.mean(disc))
         print("Observation Model Losses: {}".format(obsModelLosses))
-        print("Critic Model Losses: {}".format(criticModelLosses))
         print("Action Model Losses: {}".format(actionModelLosses))
-        print("Critic Win Rate: {}".format(self.tally / len(self.actMemory)))
+        if(self.gate_active):
+            print("Critic Model Losses: {}".format(criticModelLosses))
+            print("Critic Win Rate: {}".format(self.tally / len(self.actMemory)))
         K.set_learning_phase(0)
 
     def reset_memory(self):
@@ -348,11 +361,10 @@ def __main__():
 #        r = realtime.StreamPlayer(d.midi_stream)
 #        r.play()
     while iterations < nIter:
-        note = agent.observe(obs)
         if(showAndTell):
 #            d.pattern_generator(note)
             env.render()
-        decision = agent.act(note)
+        decision,note = agent.act(obs)
         obs, reward, done, _ = env.step(decision)
         if(not np.isclose(reward, 0.0)):
             if(reward < 0):
