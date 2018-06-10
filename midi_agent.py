@@ -29,6 +29,7 @@ def load_midis(maxSongs = None):
         n = len(data)
     else:
         n = maxSongs
+    allNotes = []
     for file in random.sample(data, n):
         notes = []
         midi = converter.parse(file)
@@ -42,13 +43,15 @@ def load_midis(maxSongs = None):
         for element in notes_to_parse:
             if isinstance(element, note.Note):
                 notes.append(str(element.pitch))
+                allNotes.append(notes[-1])
             elif isinstance(element, chord.Chord):
                 notes.append('.'.join(str(n) for n in element.normalOrder))
+                allNotes.append(notes[-1])
         songs.append(np.array(notes))
         print(" ({} notes)".format(len(notes)))
     with open('data/notes', 'wb') as filepath:
-        pickle.dump(notes, filepath)
-    return (songs, len(set([item for sublist in songs for item in sublist])))
+        pickle.dump(allNotes, filepath)
+    return (songs, len(set(allNotes)))
 
 def process_songs(songs, n_vocab):
     pitchnames = sorted(set([item for sublist in songs for item in sublist]))
@@ -145,13 +148,12 @@ class SequenceAgent:
     def load_data(self):
         with open('data/notes', 'rb') as filepath:
             notes = pickle.load(filepath)
-        pitchnames = sorted(set(item for item in notes))
         self.vocab = len(set(notes))
         if(self.is_training):
-            songs, v = load_midis()
-            if v != vocab:
+            songs, self.vocab = load_midis()
+            if v != self.vocab:
                 print("dataset does not match model, weights will be invalid for data")
-            self.data,self.songLabelTemplate = process_songs(songs, self.vocab)
+                self.data,self.songLabelTemplate = process_songs(songs, self.vocab)
 
     def gate(self, o, n = 2, k = 1):
         obsSeq = np.reshape(np.array(self.obsMemory), (1, len(self.obsMemory)) + o.shape)
