@@ -10,7 +10,10 @@ from keras.optimizers import RMSprop
 from keras.callbacks import ModelCheckpoint
 from keras import Model
 from keras import backend as K
-from keras.utils import np_utils
+from memorylayer import *
+from keras.utils import np_utils, Sequence
+from keras.preprocessing.sequence import TimeseriesGenerator
+
 #import pygame
 import os
 from music21.midi import realtime
@@ -118,31 +121,51 @@ def gen_song_model(obs, n_vocab):
     songModel.add(Activation('softmax'))
     return songModel
 
+def printAndReturn(a):
+    print(a)
+    return a
+
 class SequenceAgent:
     def __init__(self, env, actionModel, preprofunc = serialize):
         self.preprocess = preprofunc
+        self.observationReference = self.preprocess(env.reset())
         self.is_training = False
         self.gate_active = False
+
+        self.load_data()
         i = actionModel.input
         hidden = actionModel(i)
         action = Dense(env.action_space.n)(hidden)
         action = Activation('softmax')(action)
         aModel = Model(inputs = i, outputs = action)
 
-        self.load_data()
-
+        o = Input(self.observationReference.shape)
+        l = Lambda(printAndReturn)(o)
+        observationMemory = Memory(name = 'observation_memory')(l)
         voice = gen_song_model(self.preprocess(env.reset()), self.vocab)
         critic = disc_song_model(self.vocab)
-        v = voice.input
         real = critic.input
-        fake = Input(real.shape)
+        genpred = voice(observationMemory)
+        noteActivator = Dense(1, name='note_activator', activation='linear')
+        gen = noteActivator(genpred)
+        memo = Memory(name = 'gen_note_memory')(gen)
 
-        info = voice(v)
+        realEval = critic(real)
+        criticActivator = Dense(1, name = 'critic_decision', activation='sigmoid')
+        fakeEval = critic(memo)
+        realNote = noteActivator(realEval)
+        realS = criticActivator(realEval)
+        fakeS = criticActivator(fakeEval)
+        gate = Lambda(lambda l: K.switch(K.less(l[3],l[2]), l[0], l[1]))
 
-        self.obsShape = self.preprocess(env.reset()).shape
-        self.observationModel = voice
+        gatedPred = gate([realNote,gen,realS,fakeS])
+
+        action = aModel(gatedPred)
+        self.observationModel = Model(inputs = o, outputs = genpred)
         self.criticModel = critic
         self.actionModel = aModel
+        self.holisticModel = Model(inputs = [o,real], outputs = [action,realNote,gen,gatedPred,realEval,realS,fakeS])
+        self.holisticModel.summary()
         self.reset_memory()
 
     def load_data(self):
@@ -150,41 +173,10 @@ class SequenceAgent:
             notes = pickle.load(filepath)
         self.vocab = len(set(notes))
         if(self.is_training):
-            songs, self.vocab = load_midis()
+            songs, v = load_midis()
             if v != self.vocab:
                 print("dataset does not match model, weights will be invalid for data")
-                self.data,self.songLabelTemplate = process_songs(songs, self.vocab)
-
-    def gate(self, o, n = 2, k = 1):
-        obsSeq = np.reshape(np.array(self.obsMemory), (1, len(self.obsMemory)) + o.shape)
-        fake = np.argmax(self.observationModel.predict(obsSeq))
-        if(self.gate_active):
-            l = len(self.actMemory)
-            candidates = [d for d in self.data if d.shape[0] > l]
-            c = candidates[np.random.randint(0,len(candidates))]
-            if l < 1:
-                realPrefix = np.reshape(np.array([-1.0]), (1,1,1))
-                fakePrefix = np.reshape(np.array([-1.0]), (1,1,1))
-            else:
-                realPrefix = np.reshape(c[:l], (1,l,1))
-                fakePrefix = np.reshape(np.array(self.actMemory), (1,l,1))
-
-            real = (c[l] * self.vocab).astype(np.int)
-            realPred = self.criticModel.predict(realPrefix)
-            fakePred = self.criticModel.predict(fakePrefix)
-            self.criticMemory.append(np.append(realPrefix,fakePrefix,axis=0))
-            realAgreement = realPred[0][real]
-            fakeAgreement = fakePred[0][fake]
-
-            if(realAgreement > fakeAgreement):
-                winner = real
-                self.tally += 1
-            else:
-                winner = fake
-            a = winner / self.vocab
-        else:
-            a = fake / self.vocab
-        return a
+            self.data,self.songLabelTemplate = process_songs(songs, self.vocab)
 
     def compile(self, weights_path = 'checkpoints'):
         self.observationModel = self.agenty_compile(self.observationModel)
@@ -200,15 +192,15 @@ class SequenceAgent:
         if(os.path.exists(weights_path + '/weights-tiny-brain.hdf5')):
             self.actionModel.load_weights(weights_path + '/weights-tiny-brain.hdf5')
             print("Action model loaded checkpoint")
+        if(os.path.exists(weights_path + '/weights-holistic.hdf5')):
+            self.actionModel.load_weights(weights_path + '/weights-holistic.hdf5')
+            print("Holistic model loaded checkpoint")
 
-    def observe(self, obs):
+    def act(self, obs):
         o = self.preprocess(obs)
-        self.obsMemory.append(o)
-        return self.gate(o)
-
-    def act(self, actionable):
-        self.actMemory.append(actionable)
-        act = self.actionModel.predict(np.expand_dims(actionable, axis=0))
+        print(o.shape)
+        note = self.observationModel.predict(o)
+        action = self.agentModel.predict(note)
         choice = probArgMax(act[0])
         return choice
 
@@ -258,6 +250,7 @@ class SequenceAgent:
         self.actionModel.save_weights(path + '/weights-tiny-brain.hdf5')
         self.observationModel.save_weights(path + '/weights-midi-gen.hdf5')
         self.criticModel.save_weights(path + '/weights-midi-critic.hdf5')
+        self.holisticModel.save_weights(path + '/weights-holistic.hdf5')
 
     def agenty_compile(self, model, lr = 1e-3):
         y = Input((1,))
@@ -267,8 +260,8 @@ class SequenceAgent:
 
     def summary(self):
         self.actionModel.summary()
-        self.observationModel.summary()
-        self.criticModel.summary()
+#        self.observationModel.summary()
+#        self.criticModel.summary()
 
 def agenty_loss(y,t):
     return K.square(t ** 0 - y)
@@ -356,6 +349,8 @@ def __main__():
     done = False
     showAndTell = args.showAndTell
     obs = env.reset()
+    obs, reward, done, _ = env.step(0)
+
     wins = 0
     losses = 0
 #    if(showAndTell):
