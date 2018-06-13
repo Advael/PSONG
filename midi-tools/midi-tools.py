@@ -132,15 +132,14 @@ def stageClient(notes):
 
 def daemonStart():
   p = Process(target = stageDaemon, args=(128,0,"./note_feed"))
+  p.daemon = True
   p.start()
   return p
 
-def daemonEnd(p):
-  p.join()
-
-p = daemonStart()                                                                 
-if len(argv) > 1:
-  for i in range(10):
-    stageClient(list(fileToTickNotes(argv[1])))
-    time.sleep(5)
-daemonEnd(p)
+#p = daemonStart()                                                                 
+#time.sleep(1)
+#if len(argv) > 1:
+#for i in range(10):
+#    stageClient(list(fileToTickNotes(argv[1])))
+#  stageClient([i*20])
+#  time.sleep(1)
