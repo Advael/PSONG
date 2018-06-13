@@ -13,8 +13,8 @@ from keras import backend as K
 from keras.utils import np_utils
 #import pygame
 import os
-from music21.midi import realtime
-from music21 import converter, instrument, note, chord, stream
+#from music21.midi import realtime
+#from music21 import converter, instrument, note, chord, stream
 import argparse
 import cv2
 import random
@@ -22,6 +22,7 @@ import glob
 import pickle
 import numpy as np
 import gym
+import midi_tools
 def load_midis(maxSongs = None):
     songs = []
     data = glob.glob("midi_songs/*.mid")
@@ -339,6 +340,9 @@ def __main__():
     iterations = 0
     done = False
     showAndTell = args.showAndTell
+    # start staging daemon
+    if(showAndTell):
+        p = midi_tools.daemonStart()
     obs = env.reset()
     wins = 0
     losses = 0
@@ -349,6 +353,8 @@ def __main__():
     while iterations < nIter:
         note = agent.observe(obs)
         if(showAndTell):
+            # play note
+            midi_tools.stageClient([note])
 #            d.pattern_generator(note)
             env.render()
         decision = agent.act(note)
