@@ -89,35 +89,39 @@ def stageDaemon(client, port, filename):
   sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
   sock.bind(filename)
   sock.listen(10)
-
-  conn,addr = sock.accept()
   tick = 0
-  lastNote = 0
+
   while True:
-    data = conn.recv(1000)
-    notes = map(lambda b: int(b), data)
-    for note in notes:
-      tick+=5
-      buf = None
-      if note != lastNote:
-        if lastNote != 0:
-          event = NoteOffEvent()
-          event.tick = tick
-          event.set_pitch(note)
-          event.set_velocity(40)
-          buf = seq.event_write(event, False, False, True)
-        if note == 0:
-          tick+=5
-        else:
-          event = NoteOnEvent()
-          event.tick = tick
-          event.set_pitch(note)
-          event.set_velocity(40)
-          buf = seq.event_write(event, False, False, True)
-      lastNote = note
-      if buf == None:
-        continue
-    time.sleep(.1)
+    conn,addr = sock.accept()
+    lastNote = 0
+    while True:
+      data = conn.recv(1000)
+      if not data:
+        break
+      notes = map(lambda b: int(b), data)
+      for note in notes:
+        tick+=5
+        buf = None
+        if note != lastNote:
+          if lastNote != 0:
+            event = NoteOffEvent()
+            event.tick = tick
+            event.set_pitch(note)
+            event.set_velocity(40)
+            buf = seq.event_write(event, False, False, True)
+          if note == 0:
+            tick+=5
+          else:
+            event = NoteOnEvent()
+            event.tick = tick
+            event.set_pitch(note)
+            event.set_velocity(40)
+            buf = seq.event_write(event, False, False, True)
+        lastNote = note
+        if buf == None:
+          continue
+      time.sleep(.1)
+    conn.close()
 
 def stageClient(notes):
   sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -128,13 +132,14 @@ def stageClient(notes):
 
 def daemonStart():
   p = Process(target = stageDaemon, args=(128,0,"./note_feed"))
+  p.daemon = True
   p.start()
   return p
 
-def daemonEnd(p):
-  p.join()
-
-#p = daemonStart()                                                                 #
-#if len(argv) > 1:                                                                 #
-#  stageClient(list(fileToTickNotes(argv[1])))                                     #
-#daemonEnd(p)                                                                      #
+#p = daemonStart()                                                                 
+#time.sleep(1)
+#if len(argv) > 1:
+#for i in range(10):
+#    stageClient(list(fileToTickNotes(argv[1])))
+#  stageClient([i*20])
+#  time.sleep(1)
